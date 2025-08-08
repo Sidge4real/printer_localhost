@@ -2,7 +2,31 @@
 
 ## Project Description
 
-This project provides a user-friendly web interface for managing and using printers in Windows Subsystem for Linux (WSL) without requiring direct Linux commands. It combines a comprehensive setup guide with an intuitive web application that simplifies the printing process for WSL users.
+This project provides a user-friendly web interface for managing and using printers in Windows Subsystem for Linux ### Troubleshooting
+
+### USB Connection Issues
+
+**Reconnect Printer to WSL:**
+```powershell
+# First check current USB devices
+usbipd list
+
+# Unbind if already bound
+usbipd unbind --busid 1-4
+
+# Bind and attach (use your actual busid)
+usbipd bind --busid 1-4
+usbipd attach --busid 1-4 --wsl Ubuntu
+
+# Or use automated method with admin elevation
+powershell -Command "Start-Process PowerShell -ArgumentList '-NoProfile -Command usbipd bind --busid 1-4; usbipd attach --busid 1-4 --wsl Ubuntu; Read-Host \"Press Enter to continue\"' -Verb RunAs"
+```
+
+**Verify USB connection in WSL:**
+```bash
+lsusb
+# Should show: Bus 001 Device 002: ID 04a9:1748 Canon, Inc. PIXMA MG5100 Series
+```hout requiring direct Linux commands. It combines a comprehensive setup guide with an intuitive web application that simplifies the printing process for WSL users.
 
 The web interface allows users to:
 - Manage printer connections
@@ -41,15 +65,31 @@ winget install usbipd
 
 ### 2. Connect Printer to WSL
 
+First, check which USB devices are available:
 ```powershell
-# List USB connections (requires admin rights)
-usbipd wsl list
+usbipd list
+```
 
-# Connect printer to WSL
-usbipd attach --busid <your-printer-busid> --wsl Ubuntu
+Example output:
+```
+BUSID  VID:PID    DEVICE                        STATE
+1-4    04a9:1748  Canon MG5100 ser, Canon MG5100 series  Not shared
+```
 
-# Verify printer connection in WSL
-wsl lsusb
+Then bind and attach the printer (requires admin rights):
+```powershell
+# Method 1: Manual steps (requires separate admin PowerShell)
+usbipd bind --busid 1-4
+usbipd attach --busid 1-4 --wsl Ubuntu
+
+# Method 2: Automatic with admin elevation
+powershell -Command "Start-Process PowerShell -ArgumentList '-NoProfile -Command usbipd bind --busid 1-4; usbipd attach --busid 1-4 --wsl Ubuntu; Read-Host \"Press Enter to continue\"' -Verb RunAs"
+```
+
+Verify printer connection in WSL:
+```bash
+lsusb
+# Should show: Bus 001 Device 002: ID 04a9:1748 Canon, Inc. PIXMA MG5100 Series
 ```
 
 ### 3. Configure Port Forwarding
@@ -63,22 +103,63 @@ Access CUPS web interface at: http://localhost:631
 ### 4. Install CUPS and Drivers
 
 ```bash
+# Update package index
 sudo apt update
-sudo apt install cups printer-driver-gutenprint
+
+# Install CUPS daemon and client tools
+sudo apt install cups-daemon cups-client cups-bsd
+
+# Install Gutenprint drivers for Canon printers
+sudo apt install printer-driver-gutenprint
+
+# Install IPP-USB for driverless printing
+sudo apt install ipp-usb
+
+# Add user to lpadmin group
+sudo usermod -a -G lpadmin $USER
+
+# Start CUPS service
+sudo systemctl start cups
+
+# Check CUPS status
+sudo systemctl status cups
 ```
 
 ### 5. Add Printer
 
-First, check available devices:
+First, check available drivers for your printer model:
+```bash
+lpinfo -m | grep -i mg5100
+# Should show: gutenprint.5.3://bjc-PIXMA-MG5100/expert Canon PIXMA MG5100 - CUPS+Gutenprint v5.3.3
+```
+
+Check available devices:
 ```bash
 sudo lpinfo -v
 ```
 
-Then add the printer:
+Add the printer (choose one method):
+
+**Method A: USB Connection (after USB binding)**
 ```bash
-sudo lpadmin -p MG5100 -E -v "usb://Canon/MG5100%20series?serial=306BCF&interface=1" -m gutenprint.5.3://bjc-PIXMA-MG5100/expert
+sudo lpadmin -p MG5100 -E -v "usb://Canon/MG5100%20series?serial=306BCF&interface=1" -m "gutenprint.5.3://bjc-PIXMA-MG5100/expert"
+```
+
+**Method B: Socket Connection (for testing without USB)**
+```bash
+sudo lpadmin -p MG5100 -E -v "socket://127.0.0.1" -m "gutenprint.5.3://bjc-PIXMA-MG5100/expert"
+```
+
+Enable and accept the printer:
+```bash
 sudo cupsenable MG5100
 sudo cupsaccept MG5100
+```
+
+Verify printer is added:
+```bash
+lpstat -p
+# Should show: printer MG5100 is idle. enabled since [timestamp]
 ```
 
 ## Driver Installation Methods
@@ -131,28 +212,72 @@ sudo chown root:root $(which cups-brf)
 
 ### Print Commands
 
+**Understanding Print Process:**
+- Adding to queue: `lp -d MG5100 test.txt` (places job in queue)
+- Physical printing: Requires USB binding to WSL (see step 2)
+
 ```bash
 # Check printer status
 lpstat -p
 
-# Print a test file
-echo "Test print from WSL2" > test.txt
+# Create a test file
+echo "Test print from WSL2 - Canon MG5100" > test.txt
+
+# Add print job to queue
 lp -d MG5100 test.txt
+# Output: request id is MG5100-1 (1 file(s))
+
+# Check print queue
+lpstat -o
+# Shows pending jobs
 
 # Print from Windows path
-wsl lp -d MG5100 /mnt/c/Users/username/Downloads/file.pdf
+lp -d MG5100 /mnt/c/Users/username/Downloads/file.pdf
+
+# Print with specific options
+lp -d MG5100 -o media=A4 -o sides=two-sided-long-edge test.txt
 ```
+
+**Important Notes:**
+- Jobs are automatically removed from queue after successful printing
+- If printer is not physically connected via USB, jobs will remain in queue
+- Use `lpstat -o` to monitor queue status
 
 ### Additional Commands
 
 ```bash
 # Restart CUPS service
-sudo service cups restart
+sudo systemctl restart cups
 
+# Check CUPS service status
+sudo systemctl status cups
+
+# List all available printer models
+lpinfo -m | grep -i canon
+
+# Check print queue and remove jobs
+lpstat -o                    # Show queue
+cancel MG5100-1             # Cancel specific job
+cancel -a MG5100            # Cancel all jobs for printer
+
+# Enable/disable printer
+sudo cupsdisable MG5100     # Disable printer
+sudo cupsenable MG5100      # Enable printer
+
+# Remove and re-add printer
+sudo lpadmin -x MG5100      # Remove printer
+# Then re-add with lpadmin command from step 5
+```
+
+**Windows Commands:**
+```powershell
 # List Windows printers
-Get-Printer  # Run in PowerShell
+Get-Printer
 
-# Search for Gutenprint drivers
+# Check USBIPD status
+usbipd list
+
+# Search for Gutenprint drivers (in WSL)
 lpinfo -m | grep -i mg5100
 ```
 
@@ -163,3 +288,21 @@ To allow nodemon to run on your device via PowerShell:
 ```powershell
 Set-ExecutionPolicy RemoteSigned
 ```
+
+## Quick Reference - Essential Commands
+
+**For the web application to work properly, these two operations must function:**
+
+### 1. Add Print Job to Queue (WSL)
+```bash
+lp -d MG5100 test.txt
+```
+*This places the print job in the CUPS queue*
+
+### 2. Physical Printing (Windows PowerShell)
+```powershell
+powershell -Command "Start-Process PowerShell -ArgumentList '-NoProfile -Command usbipd bind --busid 1-4; usbipd attach --busid 1-4 --wsl Ubuntu; Read-Host \"Press Enter to continue\"' -Verb RunAs"
+```
+*This enables actual physical printing by connecting the USB printer to WSL*
+
+**Note:** The web application combines these operations to provide seamless printing functionality. The first command handles the print job submission, while the second ensures the printer is physically accessible for output.
